@@ -1,45 +1,70 @@
-import sounddevice as sd
-import numpy as np
-import scipy.io.wavfile as wav
-import requests
-import io
+import os
+from google.cloud import speech
+import pyaudio
+import wave
 
-# Configure NVIDIA API
-API_KEY = "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"
-NVIDIA_API_URL = "https://api.nvidia.com/asr/canary-1b"  # Replace with actual endpoint
+# Function to record audio from the microphone
+def record_audio(filename="output.wav", duration=5, rate=16000):
+    chunk = 1024  # Record in chunks of 1024 samples
+    format = pyaudio.paInt16  # 16-bit audio format
+    channels = 1  # Mono audio
+    rate = rate  # Sampling rate
 
-# Function to record audio
-def record_audio(duration=5, samplerate=16000):
+    p = pyaudio.PyAudio()
+
     print("Recording... Speak Now!")
-    audio_data = sd.rec(int(samplerate * duration), samplerate=samplerate, channels=1, dtype='int16')
-    sd.wait()
+    stream = p.open(format=format, channels=channels, rate=rate, input=True, frames_per_buffer=chunk)
+    frames = []
+
+    for _ in range(0, int(rate / chunk * duration)):
+        data = stream.read(chunk)
+        frames.append(data)
+
     print("Recording complete.")
-    return samplerate, audio_data
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
 
-# Function to save audio as WAV format
-def save_as_wav(samplerate, audio_data):
-    with io.BytesIO() as wav_buffer:
-        wav.write(wav_buffer, samplerate, audio_data)
-        return wav_buffer.getvalue()
+    # Save the recorded audio to a WAV file
+    with wave.open(filename, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(p.get_sample_size(format))
+        wf.setframerate(rate)
+        wf.writeframes(b"".join(frames))
 
-# Function to transcribe audio using NVIDIA Canary-1B-ASR
-def transcribe_audio(audio_bytes):
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "audio/wav"
-    }
-    
-    response = requests.post(NVIDIA_API_URL, headers=headers, data=audio_bytes)
-    
-    if response.status_code == 200:
-        return response.json().get("transcription", "No transcription found.")
-    else:
-        return f"Error: {response.status_code}, {response.text}"
+    return filename
+
+# Function to transcribe audio using Google Cloud Speech-to-Text API
+def transcribe_audio(filename):
+    client = speech.SpeechClient()
+
+    # Load the audio file
+    with open(filename, "rb") as audio_file:
+        content = audio_file.read()
+
+    audio = speech.RecognitionAudio(content=content)
+    config = speech.RecognitionConfig(
+        encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+        sample_rate_hertz=16000,
+        language_code="en-US",
+    )
+
+    # Perform speech-to-text
+    print("Transcribing audio...")
+    response = client.recognize(config=config, audio=audio)
+
+    # Extract and return the transcription
+    for result in response.results:
+        print("Transcription: {}".format(result.alternatives[0].transcript))
+        return result.alternatives[0].transcript
+
+    return "No transcription available."
 
 if __name__ == "__main__":
-    samplerate, audio_data = record_audio()
-    audio_wav = save_as_wav(samplerate, audio_data)
-    transcription = transcribe_audio(audio_wav)
-    
-    print("\nTranscribed Text:")
+    # Record audio and save it to a file
+    audio_file = record_audio()
+
+    # Transcribe the recorded audio
+    transcription = transcribe_audio(audio_file)
+    print("\nFinal Transcription:")
     print(transcription)
